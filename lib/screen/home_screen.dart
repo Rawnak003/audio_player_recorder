@@ -1,5 +1,4 @@
 import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:path/path.dart' as path;
@@ -14,84 +13,129 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  String? recordingPath;
+  final AudioRecorder _recorder = AudioRecorder();
+  final AudioPlayer _player = AudioPlayer();
 
-  final AudioRecorder audioRecorder = AudioRecorder();
-  final AudioPlayer audioPlayer = AudioPlayer();
+  bool _isRecording = false;
+  bool _isPlaying = false;
+  String? _recordingPath;
 
-  bool isRecording = false;
-  bool isPlaying = false;
+  @override
+  void initState() {
+    super.initState();
+
+    // Listen to playback state changes
+    _player.playerStateStream.listen((state) async {
+      final playing = state.playing;
+      final completed = state.processingState == ProcessingState.completed;
+
+      if (completed) {
+        // ✅ Stop playback completely — prevents looping
+        await _player.stop();
+        if (mounted) {
+          setState(() {
+            _isPlaying = false;
+          });
+        }
+        return;
+      }
+
+      if (mounted) {
+        setState(() {
+          _isPlaying = playing;
+        });
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _player.dispose();
+    _recorder.dispose();
+    super.dispose();
+  }
+
+  Future<void> _toggleRecording() async {
+    if (_isRecording) {
+      final path = await _recorder.stop();
+      if (path != null) {
+        setState(() {
+          _isRecording = false;
+          _recordingPath = path;
+        });
+      }
+    } else {
+      if (await _recorder.hasPermission()) {
+        final dir = await getApplicationDocumentsDirectory();
+        final filePath = path.join(dir.path, 'recording.m4a');
+        await _recorder.start(
+          RecordConfig(encoder: AudioEncoder.aacLc, bitRate: 128000, sampleRate: 44100),
+          path: filePath,
+        );
+        setState(() {
+          _isRecording = true;
+          _recordingPath = null;
+        });
+      }
+    }
+  }
+
+  Future<void> _togglePlayback() async {
+    if (_recordingPath == null) return;
+
+    if (_isPlaying) {
+      await _player.pause();
+      setState(() => _isPlaying = false);
+    } else {
+      // If the player was stopped or completed, reload the source
+      if (_player.processingState == ProcessingState.idle ||
+          _player.processingState == ProcessingState.completed) {
+        await _player.setFilePath(_recordingPath!);
+      } else if (_player.processingState == ProcessingState.ready) {
+        await _player.seek(Duration.zero);
+      }
+
+      await _player.play();
+      setState(() => _isPlaying = true);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Audio Player')),
-      floatingActionButton: _buildFloatingActionButton(),
-      body: _buildBody(),
-    );
-  }
-
-  Widget _buildBody() {
-    return SizedBox(
-      width: double.infinity,
-      height: double.infinity,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          if (recordingPath != null)
-            MaterialButton(
-              onPressed: () async {
-                if (audioPlayer.playing) {
-                  audioPlayer.stop();
-                  setState(() {
-                    isPlaying = false;
-                  });
-                } else {
-                  await audioPlayer.setFilePath(recordingPath!);
-                  await audioPlayer.play();
-                  setState(() {
-                    isPlaying = true;
-                  });
-                }
-              },
-              color: Colors.blue,
-              child: Text(isPlaying ? 'Stop' : 'Play'),
-            ),
-          if (recordingPath == null) const Text('No Recording Found :('),
-        ],
+      appBar: AppBar(title: const Text('Audio Recorder & Player')),
+      floatingActionButton: FloatingActionButton(
+        onPressed: _toggleRecording,
+        backgroundColor: _isRecording ? Colors.red : Colors.blue,
+        child: Icon(_isRecording ? Icons.stop : Icons.mic),
       ),
-    );
-  }
-
-  Widget _buildFloatingActionButton() {
-    return FloatingActionButton(
-      child: Icon(isRecording ? Icons.stop : Icons.mic),
-      onPressed: () async {
-        if (isRecording) {
-          String? path = await audioRecorder.stop();
-          if (path != null) {
-            setState(() {
-              isRecording = false;
-              recordingPath = path;
-            });
-          }
-        } else {
-          if (await audioRecorder.hasPermission()) {
-            final Directory appDocumentaryDir =
-                await getApplicationDocumentsDirectory();
-            final String filePath = path.join(
-              appDocumentaryDir.path,
-              'recording.m4a',
-            );
-            await audioRecorder.start(path: filePath, const RecordConfig());
-            setState(() {
-              isRecording = true;
-              recordingPath = null;
-            });
-          }
-        }
-      },
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            if (_recordingPath != null)
+              ElevatedButton.icon(
+                onPressed: _togglePlayback,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.blue,
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                ),
+                icon: Icon(
+                  _isPlaying ? Icons.pause : Icons.play_arrow,
+                  color: Colors.white,
+                ),
+                label: Text(
+                  _isPlaying ? 'Pause' : 'Play',
+                  style: const TextStyle(color: Colors.white),
+                ),
+              ),
+            if (_recordingPath == null && !_isRecording)
+              const Text('No recording yet.', style: TextStyle(fontSize: 16)),
+            if (_isRecording)
+              const Text('Recording...', style: TextStyle(color: Colors.red, fontSize: 16)),
+          ],
+        ),
+      ),
     );
   }
 }
